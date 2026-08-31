@@ -196,24 +196,30 @@ static const struct ploytec_subpacket ploytec_bulk_subpackets[] = {
 };
 
 /*
- * Interrupt output packet layout (1928 bytes total):
- *   5 groups with 2-byte MIDI gaps between them
- *   Group 0: frames  0-8  (9 frames, 432 bytes) at offset 0
- *   Group 1: frames  9-18 (10 frames) at offset 434
- *   Group 2: frames 19-28 (10 frames) at offset 916
- *   Group 3: frames 29-38 (10 frames) at offset 1398
- *   Group 4: frame  39    (1 frame)   at offset 1880
+ * Interrupt output packet layout (4096 bytes total):
+ *   8 sub-packets of 512 bytes, wire format identical to bulk:
+ *   10 contiguous frames (480 bytes) + 2 MIDI bytes at offset 480
+ *   + 30 bytes padding, per sub-packet.
+ *
+ *   Group g: frames (g*10)..(g*10+9) at offset g*512, for g in 0..7.
+ *
+ * Confirmed for the Xone:DB2 by Windows USB capture (14 x 512-byte
+ * sub-packets per URB on interrupt endpoint 0x05). The device does NOT
+ * use the older 482-byte sub-packet with MIDI split at frame 9.
  */
 static const struct ploytec_subpacket ploytec_int_subpackets[] = {
-	{ .start_frame =  0, .frame_count =  9, .byte_offset = 0 },
-	{ .start_frame =  9, .frame_count = 10, .byte_offset = 434 },
-	{ .start_frame = 19, .frame_count = 10, .byte_offset = 916 },
-	{ .start_frame = 29, .frame_count = 10, .byte_offset = 1398 },
-	{ .start_frame = 39, .frame_count =  1, .byte_offset = 1880 },
+	{ .start_frame =  0, .frame_count = 10, .byte_offset = 0 },
+	{ .start_frame = 10, .frame_count = 10, .byte_offset = 512 },
+	{ .start_frame = 20, .frame_count = 10, .byte_offset = 1024 },
+	{ .start_frame = 30, .frame_count = 10, .byte_offset = 1536 },
+	{ .start_frame = 40, .frame_count = 10, .byte_offset = 2048 },
+	{ .start_frame = 50, .frame_count = 10, .byte_offset = 2560 },
+	{ .start_frame = 60, .frame_count = 10, .byte_offset = 3072 },
+	{ .start_frame = 70, .frame_count = 10, .byte_offset = 3584 },
 };
 
 #define PLOYTEC_BULK_NUM_SUBPACKETS  4
-#define PLOYTEC_INT_NUM_SUBPACKETS   5
+#define PLOYTEC_INT_NUM_SUBPACKETS   8
 
 /* Bulk MIDI slots: 1 byte each, after each 10-frame group */
 static const struct ploytec_midi_slot ploytec_bulk_midi_slots[] = {
@@ -223,16 +229,20 @@ static const struct ploytec_midi_slot ploytec_bulk_midi_slots[] = {
 	{ .offset = 2016, .num_bytes = 1 },
 };
 
-/* Interrupt MIDI slots: 2 bytes each, between frame groups */
+/* Interrupt MIDI slots: 2 bytes each, at offset 480 within every 512-byte sub-packet */
 static const struct ploytec_midi_slot ploytec_int_midi_slots[] = {
-	{ .offset = 432,  .num_bytes = 2 },
-	{ .offset = 914,  .num_bytes = 2 },
-	{ .offset = 1396, .num_bytes = 2 },
-	{ .offset = 1878, .num_bytes = 2 },
+	{ .offset = 480,  .num_bytes = 2 },
+	{ .offset = 992,  .num_bytes = 2 },
+	{ .offset = 1504, .num_bytes = 2 },
+	{ .offset = 2016, .num_bytes = 2 },
+	{ .offset = 2528, .num_bytes = 2 },
+	{ .offset = 3040, .num_bytes = 2 },
+	{ .offset = 3552, .num_bytes = 2 },
+	{ .offset = 4064, .num_bytes = 2 },
 };
 
 #define PLOYTEC_BULK_NUM_MIDI_SLOTS  4
-#define PLOYTEC_INT_NUM_MIDI_SLOTS   4
+#define PLOYTEC_INT_NUM_MIDI_SLOTS   8
 
 
 /* ========================================================================

@@ -48,6 +48,22 @@ struct ploytec_private {
 /* Supported sample rates */
 static const unsigned int ploytec_rates[] = { 44100, 48000, 88200, 96000 };
 
+/*
+ * SET_CUR sample-rate endpoint sequence.
+ *
+ * The Windows driver issues 7 SET_CUR requests alternating between the
+ * input (wIndex 0x0086) and output (wIndex 0x0005) rate endpoints,
+ * beginning with input: IN, OUT, IN, OUT, IN, OUT, IN. The device's PLL
+ * only locks after the full sequence -- a shorter sequence leaves it
+ * emitting silence. Confirmed from a USB capture of the Xone:DB2.
+ */
+static const u16 ploytec_set_rate_eps[] = {
+	PLOYTEC_EP_RATE_IN,  PLOYTEC_EP_RATE_OUT,
+	PLOYTEC_EP_RATE_IN,  PLOYTEC_EP_RATE_OUT,
+	PLOYTEC_EP_RATE_IN,  PLOYTEC_EP_RATE_OUT,
+	PLOYTEC_EP_RATE_IN,
+};
+
 /* Forward declarations */
 static int ploytec_set_rate(struct ozzy_chip *chip, unsigned int rate_index);
 
@@ -188,12 +204,27 @@ static int ploytec_confirm_status(struct ozzy_chip *chip)
 static int ploytec_init(struct ozzy_chip *chip)
 {
 	struct ploytec_private *priv;
+	unsigned int i;
 	int ret;
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 	chip->private_data = priv;
+
+	/*
+	 * Force 48 kHz. The Xone:DB2 accepts other rates at the USB level
+	 * but always clocks its DAC at 48 kHz, so anything else plays back
+	 * at the wrong speed. The macOS driver is 48 kHz only for the same
+	 * reason. An ALSA client may still request another rate; that path
+	 * is unchanged and remains untested on the DB2.
+	 */
+	for (i = 0; i < chip->info->num_rates; i++) {
+		if (chip->info->rates[i] == 48000) {
+			chip->requested_rate = i;
+			break;
+		}
+	}
 
 	ploytec_log(&chip->dev->dev, "--- begin handshake sequence ---\n");
 
@@ -255,13 +286,15 @@ static void ploytec_free(struct ozzy_chip *chip)
 
 /*
  * ploytec_set_rate - Set the hardware sample rate via vendor requests.
- * Converts the rate to 3 little-endian bytes and sends SET_CUR to both
- * the input (0x86) and output (0x05) endpoints.
+ * Converts the rate to 3 little-endian bytes and replays the 7-call
+ * SET_CUR sequence (see ploytec_set_rate_eps) that the Windows driver
+ * uses to lock the device's PLL.
  */
 static int ploytec_set_rate(struct ozzy_chip *chip, unsigned int rate_index)
 {
 	struct ploytec_private *priv = chip->private_data;
 	unsigned int rate;
+	unsigned int i;
 	int ret;
 
 	if (rate_index >= chip->info->num_rates)
@@ -270,15 +303,14 @@ static int ploytec_set_rate(struct ozzy_chip *chip, unsigned int rate_index)
 	rate = chip->info->rates[rate_index];
 	ploytec_encode_rate(rate, priv->xfer_buf);
 
-	ret = usb_control_msg(chip->dev, usb_sndctrlpipe(chip->dev, 0),
-			      PLOYTEC_CMD_SET_RATE_REQ, PLOYTEC_CMD_SET_RATE_TYPE,
-			      0x0100, PLOYTEC_EP_RATE_IN, priv->xfer_buf, 3, 2000);
-	if (ret < 0) return ret;
-
-	ret = usb_control_msg(chip->dev, usb_sndctrlpipe(chip->dev, 0),
-			      PLOYTEC_CMD_SET_RATE_REQ, PLOYTEC_CMD_SET_RATE_TYPE,
-			      0x0100, PLOYTEC_EP_RATE_OUT, priv->xfer_buf, 3, 2000);
-	if (ret < 0) return ret;
+	for (i = 0; i < ARRAY_SIZE(ploytec_set_rate_eps); i++) {
+		ret = usb_control_msg(chip->dev, usb_sndctrlpipe(chip->dev, 0),
+				      PLOYTEC_CMD_SET_RATE_REQ, PLOYTEC_CMD_SET_RATE_TYPE,
+				      0x0100, ploytec_set_rate_eps[i],
+				      priv->xfer_buf, 3, 2000);
+		if (ret < 0)
+			return ret;
+	}
 
 	chip->current_rate = rate_index;
 
